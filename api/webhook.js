@@ -6,8 +6,11 @@ if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
 
 const bot = new Bot(TOKEN);
 
-// /start
-bot.command("start", async ctx => {
+// Evita long-polling en Vercel (sólo webhook)
+bot.init().catch(() => {/* ignore init on cold start */});
+
+// /start: selector de cliente
+bot.command("start", async (ctx) => {
   const kb = new InlineKeyboard()
     .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
     .text("CPremier 🏢", "cliente:CPremier");
@@ -15,7 +18,7 @@ bot.command("start", async ctx => {
 });
 
 // Selección de cliente
-bot.callbackQuery(/^cliente:(.*)$/, async ctx => {
+bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
   const cliente = ctx.match[1];
   setCliente(ctx.chat.id, cliente);
   await ctx.answerCallbackQuery();
@@ -23,12 +26,12 @@ bot.callbackQuery(/^cliente:(.*)$/, async ctx => {
 });
 
 // Mensajes
-bot.on("message", async ctx => {
+bot.on("message", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
 
   let cliente = getCliente(ctx.chat.id);
-  // Permitimos elegir en-línea: "rebel: pregunta..."
+  // Soporta "rebel: pregunta..."
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
     const map = { rebel: "Rebel", oana: "Oana", cpremier: "CPremier" };
@@ -36,13 +39,15 @@ bot.on("message", async ctx => {
     setCliente(ctx.chat.id, cliente);
     await ctx.reply(`Cliente cambiado a *${cliente}*`, { parse_mode: "Markdown" });
   }
-  if (!cliente) {
-    return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
-  }
+  if (!cliente) return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
 
   await ctx.reply("⏳ pensando…");
   try {
-    const ans = await handleUserQuestion({ chatId: ctx.chat.id, cliente, pregunta: m ? m[2] : text });
+    const ans = await handleUserQuestion({
+      chatId: ctx.chat.id,
+      cliente,
+      pregunta: m ? m[2] : text,
+    });
     await ctx.reply(ans.text, { parse_mode: "Markdown" });
   } catch (e) {
     console.error("Bot error:", e);
@@ -50,9 +55,12 @@ bot.on("message", async ctx => {
   }
 });
 
+// Handler para Vercel
 export default async function handler(req, res) {
   if (req.method === "POST") {
+    // Telegram → webhook
     return webhookCallback(bot, "express")(req, res);
   }
+  // Healthcheck
   res.status(200).send("OK");
 }
