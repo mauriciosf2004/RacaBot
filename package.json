@@ -1,14 +1,14 @@
 {
-  "name": "insight-telegram-bot",
+  "name": "racabot",
   "version": "1.0.0",
   "type": "module",
+  "main": "index.js",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "echo \"no build\"",
-    "start": "node api/webhook.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "grammy": "^1.29.0",
-    "openai": "^4.56.0"
+    "node-telegram-bot-api": "^0.63.0",
+    "openai": "^4.0.0",
+    "@pinecone-database/pinecone": "^1.1.0"
   }
 }
