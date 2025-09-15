@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/webhook.js": {
+      "runtime": "nodejs18.x"
+    },
+    "api/set-webhook.js": {
+      "runtime": "nodejs18.x"
+    }
+  }
+}

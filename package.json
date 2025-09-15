@@ -1,0 +1,14 @@
+{
+  "name": "insight-telegram-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo \"no build\"",
+    "start": "node api/webhook.js"
+  },
+  "dependencies": {
+    "grammy": "^1.29.0",
+    "openai": "^4.56.0"
+  }
+}
