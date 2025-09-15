@@ -2,12 +2,8 @@
   "name": "racabot",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
-    "node-telegram-bot-api": "^0.63.0",
+    "grammy": "^1.19.2",
     "openai": "^4.0.0",
     "@pinecone-database/pinecone": "^1.1.0"
   }
