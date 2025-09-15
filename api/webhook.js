@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard, webhookCallback } from "grammy";
-import { handleUserQuestion, getCliente, setCliente } from "./botCore.js";
+import { handleUserQuestion, getCliente, setCliente } from "../apibotCore.js";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
