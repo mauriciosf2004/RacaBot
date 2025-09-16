@@ -6,9 +6,8 @@ const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_HOST = (process.env.PINECONE_HOST || "").replace(/\/+$/, "");
 const PINECONE_HOST_CPREMIER = (process.env.PINECONE_HOST_CPREMIER || "").replace(/\/+$/, "");
 
-// almacenamiento simple por chat (MVP). Para persistencia real usa Vercel KV/Supabase.
-const session = new Map(); // chatId -> { cliente: "Rebel"|"Oana"|"CPremier" }
-
+// Sesión por chat (solo en memoria)
+const session = new Map();
 export function getCliente(chatId) {
   return session.get(chatId)?.cliente || null;
 }
@@ -16,7 +15,7 @@ export function setCliente(chatId, cliente) {
   session.set(chatId, { cliente });
 }
 
-// --- RAG helpers ---
+// --- OpenAI Embedding ---
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 async function embed(text) {
@@ -27,6 +26,7 @@ async function embed(text) {
   return res.data[0].embedding;
 }
 
+// --- Pinecone helpers ---
 function pineconeHostFor(cliente) {
   if (cliente === "CPremier") return PINECONE_HOST_CPREMIER;
   return PINECONE_HOST;
@@ -35,49 +35,37 @@ function pineconeHostFor(cliente) {
 function pineconeNamespaceFor(cliente) {
   if (cliente === "Rebel") return "rebel";
   if (cliente === "Oana") return "oana_personal";
-  return "__default__"; // CPremier usa namespace default
+  return null; // CPremier NO ENVÍA namespace
 }
 
-// Extraer texto útil de metadata (flexible)
+// Extraer TODO lo útil de metadata
 function extractTextFromMetadata(metadata = {}) {
-  const posiblesCampos = [
-    "text",
-    "contenido",
-    "respuesta_abierta",
-    "respuesta_prioritaria",
-    "respuestas_secundarias",
-    "comentario",
-    "respuesta",
-    "detalle"
-  ];
-
+  const posiblesCampos = Object.keys(metadata);
   return posiblesCampos
-    .map(k => metadata[k])
+    .map(k => `${k}: ${metadata[k]}`)
     .filter(Boolean)
-    .join(" • "); // separador visual
+    .join(" • ");
 }
 
 async function pineconeQuery({ cliente, vector }) {
   const host = pineconeHostFor(cliente);
-  if (!host) {
-    throw new Error(`Pinecone host faltante para ${cliente}`);
-  }
-
+  if (!host) throw new Error(`Pinecone host faltante para ${cliente}`);
   const namespace = pineconeNamespaceFor(cliente);
 
   const body = {
     vector,
     topK: 6,
-    includeMetadata: true,
-    namespace
+    includeMetadata: true
   };
+
+  // Solo se envía si HAY namespace explícito
+  if (namespace) body.namespace = namespace;
 
   const r = await fetch(`${host}/query`, {
     method: "POST",
     headers: {
       "Api-Key": PINECONE_API_KEY,
-      "Content-Type": "application/json",
-      "Accept": "application/json"
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
   });
@@ -88,7 +76,6 @@ async function pineconeQuery({ cliente, vector }) {
   }
 
   const data = await r.json();
-
   const docs = (data.matches || [])
     .map(m => extractTextFromMetadata(m.metadata))
     .filter(Boolean)
@@ -98,11 +85,11 @@ async function pineconeQuery({ cliente, vector }) {
   return {
     docs,
     matchesCount: (data.matches || []).length,
-    host,
-    namespace
+    namespace: namespace || "__default__"
   };
 }
 
+// --- System Prompt ---
 function systemPromptFor(cliente) {
   const base = `Eres un estratega creativo senior de Racamandaka.
 Conoces profundamente a la marca ${cliente}.
@@ -133,6 +120,7 @@ Estilo: bullets claros, ejemplos concretos, pasos accionables.`
   return base + "\n\n" + (guides[cliente] || "");
 }
 
+// --- Main handler ---
 export async function handleUserQuestion({ chatId, cliente, pregunta }) {
   if (!OPENAI_API_KEY || !PINECONE_API_KEY || !PINECONE_HOST) {
     throw new Error("Faltan env vars: OPENAI_API_KEY / PINECONE_API_KEY / PINECONE_HOST");
@@ -142,7 +130,7 @@ export async function handleUserQuestion({ chatId, cliente, pregunta }) {
   }
 
   const vector = await embed(pregunta);
-  const { docs, matchesCount } = await pineconeQuery({ cliente, vector });
+  const { docs, matchesCount, namespace } = await pineconeQuery({ cliente, vector });
 
   if (!docs.length) {
     return { text: "No tengo esa info en la base" };
@@ -162,5 +150,5 @@ export async function handleUserQuestion({ chatId, cliente, pregunta }) {
   });
 
   const answer = chat.choices?.[0]?.message?.content?.trim() || "No tengo esa info en la base";
-  return { text: answer + `\n\n_(k=${matchesCount})_` };
+  return { text: answer + `\n\n_(k=${matchesCount}, ns=${namespace})_` };
 }
