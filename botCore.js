@@ -6,8 +6,8 @@ const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_HOST = (process.env.PINECONE_HOST || "").replace(/\/+$/, "");
 const PINECONE_HOST_CPREMIER = (process.env.PINECONE_HOST_CPREMIER || "").replace(/\/+$/, "");
 
-// Almacenamiento simple por chat (MVP). Para persistencia real usar KV/Supabase.
-const session = new Map(); // chatId -> { cliente }
+// almacenamiento simple por chat (MVP). Para persistencia real usa Vercel KV/Supabase.
+const session = new Map(); // chatId -> { cliente: "Rebel"|"Oana"|"CPremier" }
 
 export function getCliente(chatId) {
   return session.get(chatId)?.cliente || null;
@@ -35,26 +35,42 @@ function pineconeHostFor(cliente) {
 function pineconeNamespaceFor(cliente) {
   if (cliente === "Rebel") return "rebel";
   if (cliente === "Oana") return "oana_personal";
-  // CPremier usa index separado y namespace por defecto → no enviar
-  return null;
+  return "__default__"; // CPremier usa namespace default
+}
+
+// Extraer texto útil de metadata (flexible)
+function extractTextFromMetadata(metadata = {}) {
+  const posiblesCampos = [
+    "text",
+    "contenido",
+    "respuesta_abierta",
+    "respuesta_prioritaria",
+    "respuestas_secundarias",
+    "comentario",
+    "respuesta",
+    "detalle"
+  ];
+
+  return posiblesCampos
+    .map(k => metadata[k])
+    .filter(Boolean)
+    .join(" • "); // separador visual
 }
 
 async function pineconeQuery({ cliente, vector }) {
   const host = pineconeHostFor(cliente);
-  if (!host) throw new Error(`Pinecone host faltante para ${cliente}`);
+  if (!host) {
+    throw new Error(`Pinecone host faltante para ${cliente}`);
+  }
 
   const namespace = pineconeNamespaceFor(cliente);
 
   const body = {
     vector,
     topK: 6,
-    includeMetadata: true
+    includeMetadata: true,
+    namespace
   };
-
-  // 🛠️ NO enviar namespace si es null o "__default__"
-  if (namespace && namespace !== "__default__") {
-    body.namespace = namespace;
-  }
 
   const r = await fetch(`${host}/query`, {
     method: "POST",
@@ -72,8 +88,9 @@ async function pineconeQuery({ cliente, vector }) {
   }
 
   const data = await r.json();
+
   const docs = (data.matches || [])
-    .map(m => m?.metadata?.text || "")
+    .map(m => extractTextFromMetadata(m.metadata))
     .filter(Boolean)
     .slice(0, 6)
     .map(t => (t.length > 1200 ? t.slice(0, 1200) + "…" : t));
@@ -82,7 +99,7 @@ async function pineconeQuery({ cliente, vector }) {
     docs,
     matchesCount: (data.matches || []).length,
     host,
-    namespace: namespace ?? "__no_namespace__"
+    namespace
   };
 }
 
