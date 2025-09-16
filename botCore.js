@@ -6,8 +6,8 @@ const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
 const PINECONE_HOST = (process.env.PINECONE_HOST || "").replace(/\/+$/, "");
 const PINECONE_HOST_CPREMIER = (process.env.PINECONE_HOST_CPREMIER || "").replace(/\/+$/, "");
 
-// almacenamiento simple por chat (MVP). Para persistencia real usa Vercel KV/Supabase.
-const session = new Map(); // chatId -> { cliente: "Rebel"|"Oana"|"CPremier" }
+// Almacenamiento simple por chat (MVP). Para persistencia real usar KV/Supabase.
+const session = new Map(); // chatId -> { cliente }
 
 export function getCliente(chatId) {
   return session.get(chatId)?.cliente || null;
@@ -35,24 +35,26 @@ function pineconeHostFor(cliente) {
 function pineconeNamespaceFor(cliente) {
   if (cliente === "Rebel") return "rebel";
   if (cliente === "Oana") return "oana_personal";
-  // CPremier usa index separado y namespace default
-  return "__default__";
+  // CPremier usa index separado y namespace por defecto → no enviar
+  return null;
 }
 
 async function pineconeQuery({ cliente, vector }) {
   const host = pineconeHostFor(cliente);
-  if (!host) {
-    throw new Error(`Pinecone host faltante para ${cliente}`);
-  }
+  if (!host) throw new Error(`Pinecone host faltante para ${cliente}`);
 
   const namespace = pineconeNamespaceFor(cliente);
 
   const body = {
     vector,
     topK: 6,
-    includeMetadata: true,
-    namespace: namespace  // ahora siempre se envía, incluso "__default__"
+    includeMetadata: true
   };
+
+  // 🛠️ NO enviar namespace si es null o "__default__"
+  if (namespace && namespace !== "__default__") {
+    body.namespace = namespace;
+  }
 
   const r = await fetch(`${host}/query`, {
     method: "POST",
@@ -80,7 +82,7 @@ async function pineconeQuery({ cliente, vector }) {
     docs,
     matchesCount: (data.matches || []).length,
     host,
-    namespace
+    namespace: namespace ?? "__no_namespace__"
   };
 }
 
