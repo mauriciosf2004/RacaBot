@@ -1,51 +1,70 @@
 import { Bot, InlineKeyboard, webhookCallback } from "grammy";
 import { handleUserQuestion, getCliente, setCliente } from "../botCore.js";
 
-// --- Configuración ---
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const PASSWORD = "Raca2025@";
-
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
+
 const bot = new Bot(TOKEN);
+bot.init().catch(() => {}); // evitar long-polling en Vercel
 
-// --- Estado de sesión (temporal, en memoria) ---
-const authenticated = new Set(); // chatId => authenticated
+const PASSWORD = "Raca2025@";
+const sessions = new Map(); // chatId -> { authenticated: true, cliente: "Rebel"|"Oana"|"CPremier" }
 
-bot.init().catch(() => {});
-
-// --- /start ---
+// /start: pide contraseña si no está autenticado
 bot.command("start", async (ctx) => {
   const chatId = ctx.chat.id;
-  if (authenticated.has(chatId)) {
-    return mostrarSelectorCliente(ctx);
-  } else {
-    await ctx.reply("🔒 Este bot está protegido. Ingresa la contraseña:");
+  const ses = sessions.get(chatId) || {};
+  if (!ses.authenticated) {
+    await ctx.reply("🔒 Ingresa la contraseña para usar el bot:");
+    sessions.set(chatId, { ...ses, awaitingPassword: true });
+    return;
   }
+
+  const kb = new InlineKeyboard()
+    .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
+    .text("CPremier 🏢", "cliente:CPremier");
+
+  await ctx.reply("Elige el cliente con el que quieres trabajar:", { reply_markup: kb });
 });
 
-// --- Mensajes ---
-bot.on("message", async (ctx) => {
+// Contraseña
+bot.on("message:text", async (ctx, next) => {
   const chatId = ctx.chat.id;
+  const ses = sessions.get(chatId);
+
+  if (ses?.awaitingPassword) {
+    const pass = ctx.message.text.trim();
+    if (pass === PASSWORD) {
+      sessions.set(chatId, { authenticated: true });
+      await ctx.reply("✅ Acceso concedido. Usa /start para comenzar.");
+    } else {
+      await ctx.reply("❌ Contraseña incorrecta. Intenta de nuevo con /start.");
+    }
+    return; // importante: no seguir
+  }
+
+  await next(); // pasar al siguiente middleware (como mensajes normales)
+});
+
+// Selección de cliente
+bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
+  const cliente = ctx.match[1];
+  setCliente(ctx.chat.id, cliente);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(`Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`, { parse_mode: "Markdown" });
+});
+
+// Preguntas normales
+bot.on("message:text", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
 
-  // Si no está autenticado → esperar contraseña
-  if (!authenticated.has(chatId)) {
-    if (text === PASSWORD) {
-      authenticated.add(chatId);
-      return mostrarSelectorCliente(ctx);
-    } else {
-      return ctx.reply("❌ Contraseña incorrecta. Inténtalo de nuevo:");
-    }
-  }
-
-  // Detecta cliente en línea (e.g. rebel: idea...)
-  let cliente = getCliente(chatId);
+  let cliente = getCliente(ctx.chat.id);
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
     const map = { rebel: "Rebel", oana: "Oana", cpremier: "CPremier" };
     cliente = map[m[1].toLowerCase()];
-    setCliente(chatId, cliente);
+    setCliente(ctx.chat.id, cliente);
     await ctx.reply(`Cliente cambiado a *${cliente}*`, { parse_mode: "Markdown" });
   }
 
@@ -53,10 +72,10 @@ bot.on("message", async (ctx) => {
     return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
   }
 
-  await ctx.reply("⏳ pensando...");
+  await ctx.reply("⏳ pensando…");
   try {
     const ans = await handleUserQuestion({
-      chatId,
+      chatId: ctx.chat.id,
       cliente,
       pregunta: m ? m[2] : text,
     });
@@ -67,25 +86,7 @@ bot.on("message", async (ctx) => {
   }
 });
 
-// --- Botón para elegir cliente ---
-bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
-  const cliente = ctx.match[1];
-  setCliente(ctx.chat.id, cliente);
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`, {
-    parse_mode: "Markdown"
-  });
-});
-
-// --- Mostrar el teclado para elegir cliente ---
-async function mostrarSelectorCliente(ctx) {
-  const kb = new InlineKeyboard()
-    .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
-    .text("CPremier 🏢", "cliente:CPremier");
-  await ctx.reply("✅ Acceso autorizado. Elige el cliente:", { reply_markup: kb });
-}
-
-// --- Webhook para Vercel ---
+// Webhook handler para Vercel
 export default async function handler(req, res) {
   if (req.method === "POST") {
     return webhookCallback(bot, "express")(req, res);
