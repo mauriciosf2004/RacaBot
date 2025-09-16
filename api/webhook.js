@@ -4,44 +4,42 @@ import { handleUserQuestion, getCliente, setCliente } from "../botCore.js";
 // --- Configuración ---
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PASSWORD = "Raca2025@";
-const session = new Map(); // chatId -> { auth: true/false, cliente }
 
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
 const bot = new Bot(TOKEN);
 
-// --- Inicializar bot sin long-polling (solo webhook en Vercel) ---
+// --- Estado de sesión (temporal, en memoria) ---
+const authenticated = new Set(); // chatId => authenticated
+
 bot.init().catch(() => {});
 
 // --- /start ---
 bot.command("start", async (ctx) => {
   const chatId = ctx.chat.id;
-  session.set(chatId, { auth: false }); // Reiniciar sesión
-  await ctx.reply("🔒 Este bot está protegido. Por favor, ingresa la contraseña:");
+  if (authenticated.has(chatId)) {
+    return mostrarSelectorCliente(ctx);
+  } else {
+    await ctx.reply("🔒 Este bot está protegido. Ingresa la contraseña:");
+  }
 });
 
-// --- Mensajes generales ---
+// --- Mensajes ---
 bot.on("message", async (ctx) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text?.trim();
   if (!text) return;
 
-  const userSession = session.get(chatId) || {};
-
-  // --- No autenticado → pedir contraseña ---
-  if (!userSession.auth) {
+  // Si no está autenticado → esperar contraseña
+  if (!authenticated.has(chatId)) {
     if (text === PASSWORD) {
-      session.set(chatId, { auth: true });
-      const kb = new InlineKeyboard()
-        .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
-        .text("CPremier 🏢", "cliente:CPremier");
-      await ctx.reply("✅ Contraseña correcta. Elige el cliente:", { reply_markup: kb });
+      authenticated.add(chatId);
+      return mostrarSelectorCliente(ctx);
     } else {
-      await ctx.reply("❌ Contraseña incorrecta. Inténtalo de nuevo:");
+      return ctx.reply("❌ Contraseña incorrecta. Inténtalo de nuevo:");
     }
-    return;
   }
 
-  // --- Cliente en línea (e.g. "rebel: idea de contenido") ---
+  // Detecta cliente en línea (e.g. rebel: idea...)
   let cliente = getCliente(chatId);
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
@@ -52,7 +50,7 @@ bot.on("message", async (ctx) => {
   }
 
   if (!cliente) {
-    return ctx.reply("👋 Primero elige un cliente con /start (Rebel, Oana, CPremier).");
+    return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
   }
 
   await ctx.reply("⏳ pensando...");
@@ -69,7 +67,7 @@ bot.on("message", async (ctx) => {
   }
 });
 
-// --- Selección de cliente (inline button) ---
+// --- Botón para elegir cliente ---
 bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
   const cliente = ctx.match[1];
   setCliente(ctx.chat.id, cliente);
@@ -78,6 +76,14 @@ bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
     parse_mode: "Markdown"
   });
 });
+
+// --- Mostrar el teclado para elegir cliente ---
+async function mostrarSelectorCliente(ctx) {
+  const kb = new InlineKeyboard()
+    .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
+    .text("CPremier 🏢", "cliente:CPremier");
+  await ctx.reply("✅ Acceso autorizado. Elige el cliente:", { reply_markup: kb });
+}
 
 // --- Webhook para Vercel ---
 export default async function handler(req, res) {
