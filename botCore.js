@@ -1,13 +1,13 @@
 import OpenAI from "openai";
+import fs from "fs/promises";
+import path from "path";
 
 // --- Config ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
-const PINECONE_HOST = (process.env.PINECONE_HOST || "").replace(/\/+$/, "");
-const PINECONE_HOST_CPREMIER = (process.env.PINECONE_HOST_CPREMIER || "").replace(/\/+$/, "");
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// Sesión por chat (solo en memoria)
-const session = new Map();
+// --- Sesión por chat ---
+const session = new Map(); // chatId -> { cliente: "Rebel"|"Oana"|"CPremier" }
 export function getCliente(chatId) {
   return session.get(chatId)?.cliente || null;
 }
@@ -15,86 +15,36 @@ export function setCliente(chatId, cliente) {
   session.set(chatId, { cliente });
 }
 
-// --- OpenAI Embedding ---
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+// --- Carga de data por cliente ---
+const textData = {}; // { Rebel: "...", Oana: "...", CPremier: "..." }
 
-async function embed(text) {
-  const res = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: text
-  });
-  return res.data[0].embedding;
-}
-
-// --- Pinecone helpers ---
-function pineconeHostFor(cliente) {
-  if (cliente === "CPremier") return PINECONE_HOST_CPREMIER;
-  return PINECONE_HOST;
-}
-
-function pineconeNamespaceFor(cliente) {
-  if (cliente === "Rebel") return "rebel";
-  if (cliente === "Oana") return "oana_personal";
-  return null; // CPremier NO ENVÍA namespace
-}
-
-// Extraer TODO lo útil de metadata
-function extractTextFromMetadata(metadata = {}) {
-  const posiblesCampos = Object.keys(metadata);
-  return posiblesCampos
-    .map(k => `${k}: ${metadata[k]}`)
-    .filter(Boolean)
-    .join(" • ");
-}
-
-async function pineconeQuery({ cliente, vector }) {
-  const host = pineconeHostFor(cliente);
-  if (!host) throw new Error(`Pinecone host faltante para ${cliente}`);
-  const namespace = pineconeNamespaceFor(cliente);
-
-  const body = {
-    vector,
-    topK: 6,
-    includeMetadata: true
+async function loadTextData() {
+  const basePath = path.join(process.cwd(), "data");
+  const clientes = {
+    Rebel: "rebel.txt",
+    Oana: "oana.txt",
+    CPremier: "cpremier.txt",
   };
 
-  // Solo se envía si HAY namespace explícito
-  if (namespace) body.namespace = namespace;
-
-  const r = await fetch(`${host}/query`, {
-    method: "POST",
-    headers: {
-      "Api-Key": PINECONE_API_KEY,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`Pinecone ${r.status}: ${t.slice(0, 300)}`);
+  for (const [cliente, file] of Object.entries(clientes)) {
+    try {
+      const fullPath = path.join(basePath, file);
+      const content = await fs.readFile(fullPath, "utf-8");
+      textData[cliente] = content;
+    } catch (err) {
+      console.error(`Error cargando texto para ${cliente}:`, err);
+      textData[cliente] = "";
+    }
   }
-
-  const data = await r.json();
-  const docs = (data.matches || [])
-    .map(m => extractTextFromMetadata(m.metadata))
-    .filter(Boolean)
-    .slice(0, 6)
-    .map(t => (t.length > 1200 ? t.slice(0, 1200) + "…" : t));
-
-  return {
-    docs,
-    matchesCount: (data.matches || []).length,
-    namespace: namespace || "__default__"
-  };
 }
+await loadTextData();
 
-// --- System Prompt ---
+// --- Prompt ---
 function systemPromptFor(cliente) {
   const base = `Eres un estratega creativo senior de Racamandaka.
 Conoces profundamente a la marca ${cliente}.
 Tu rol es proponer, inspirar y ayudar a generar contenido útil y accionable.
-Analiza tono, valores, buyer persona y necesidades. Usa SOLO el contexto recuperado.
+Analiza tono, valores, buyer persona y necesidades. Usa SOLO el contexto.
 Si falta información, responde: "No tengo esa info en la base".
 Entrega respuestas claras, estructuradas, con ideas prácticas y listas para publicar.`;
 
@@ -114,35 +64,25 @@ Estilo: hooks potentes, captions breves con intención, mini-carruseles y CTA em
     CPremier: `Marca: CP Premier.
 Tono: profesional, claro y confiable; foco en talento, procesos y excelencia.
 Objetivo: comunicar propuestas de valor y procesos; información precisa y accionable.
-Estilo: bullets claros, ejemplos concretos, pasos accionables.`
+Estilo: bullets claros, ejemplos concretos, pasos accionables.`,
   };
 
   return base + "\n\n" + (guides[cliente] || "");
 }
 
-// --- Main handler ---
+// --- Manejo de preguntas ---
 export async function handleUserQuestion({ chatId, cliente, pregunta }) {
-  if (!OPENAI_API_KEY || !PINECONE_API_KEY || !PINECONE_HOST) {
-    throw new Error("Faltan env vars: OPENAI_API_KEY / PINECONE_API_KEY / PINECONE_HOST");
-  }
-  if (cliente === "CPremier" && !PINECONE_HOST_CPREMIER) {
-    throw new Error("Falta env var PINECONE_HOST_CPREMIER para CPremier");
-  }
-
-  const vector = await embed(pregunta);
-  const { docs, matchesCount, namespace } = await pineconeQuery({ cliente, vector });
-
-  if (!docs.length) {
+  const contexto = textData[cliente];
+  if (!contexto || contexto.length < 50) {
     return { text: "No tengo esa info en la base" };
   }
 
   const system = systemPromptFor(cliente);
-  const contexto = docs.join("\n---\n");
 
   const chat = await openai.chat.completions.create({
     model: "gpt-4o",
     temperature: 0.7,
-    max_tokens: 600,
+    max_tokens: 700,
     messages: [
       { role: "system", content: system },
       { role: "user", content: `Contexto:\n${contexto}\n\nPregunta:\n${pregunta}` }
@@ -150,5 +90,5 @@ export async function handleUserQuestion({ chatId, cliente, pregunta }) {
   });
 
   const answer = chat.choices?.[0]?.message?.content?.trim() || "No tengo esa info en la base";
-  return { text: answer + `\n\n_(k=${matchesCount}, ns=${namespace})_` };
+  return { text: answer };
 }
