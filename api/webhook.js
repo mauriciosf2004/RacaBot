@@ -5,38 +5,30 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
 
 const bot = new Bot(TOKEN);
-bot.init().catch(() => {}); // evitar error en Vercel
+bot.init().catch(() => {});
 
-// /start: selector de cliente
+// /start
 bot.command("start", async (ctx) => {
   const kb = new InlineKeyboard()
-    .text("Rebel 🏠", "cliente:Rebel")
-    .text("Oana 🌊", "cliente:Oana")
-    .row()
+    .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
     .text("CPremier 🏢", "cliente:CPremier");
-
   await ctx.reply("Elige el cliente con el que quieres trabajar:", { reply_markup: kb });
 });
 
-// Selección de cliente con botones
+// Selección
 bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
   const cliente = ctx.match[1];
   setCliente(ctx.chat.id, cliente);
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText(
-    `Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`,
-    { parse_mode: "Markdown" }
-  );
+  await ctx.editMessageText(`Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`, { parse_mode: "Markdown" });
 });
 
-// Mensajes de texto
-bot.on("message:text", async (ctx) => {
+// Mensajes
+bot.on("message", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
-
   let cliente = getCliente(ctx.chat.id);
 
-  // Permite escribir: rebel: pregunta...
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
     const map = { rebel: "Rebel", oana: "Oana", cpremier: "CPremier" };
@@ -44,10 +36,7 @@ bot.on("message:text", async (ctx) => {
     setCliente(ctx.chat.id, cliente);
     await ctx.reply(`Cliente cambiado a *${cliente}*`, { parse_mode: "Markdown" });
   }
-
-  if (!cliente) {
-    return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
-  }
+  if (!cliente) return ctx.reply("Primero elige un cliente con /start (Rebel, Oana, CPremier).");
 
   await ctx.reply("⏳ pensando…");
   try {
@@ -63,11 +52,14 @@ bot.on("message:text", async (ctx) => {
   }
 });
 
-// Webhook para Vercel
+// Handler Vercel
 export default async function handler(req, res) {
   if (req.method === "POST") {
+    // --- SHIM para “express” en Vercel ---
+    if (typeof req.header !== "function") {
+      req.header = (name) => req.headers?.[name.toLowerCase()];
+    }
     return webhookCallback(bot, "express")(req, res);
   }
   res.status(200).send("OK");
 }
-
