@@ -5,11 +5,9 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
 
 const bot = new Bot(TOKEN);
+bot.init().catch(() => {});
 
-// Evita long-polling en Vercel (sólo webhook)
-bot.init().catch(() => {/* ignore init on cold start */});
-
-// /start: selector de cliente
+// /start
 bot.command("start", async (ctx) => {
   const kb = new InlineKeyboard()
     .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
@@ -17,7 +15,7 @@ bot.command("start", async (ctx) => {
   await ctx.reply("Elige el cliente con el que quieres trabajar:", { reply_markup: kb });
 });
 
-// Selección de cliente
+// Selección
 bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
   const cliente = ctx.match[1];
   setCliente(ctx.chat.id, cliente);
@@ -29,9 +27,8 @@ bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
 bot.on("message", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
-
   let cliente = getCliente(ctx.chat.id);
-  // Soporta "rebel: pregunta..."
+
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
     const map = { rebel: "Rebel", oana: "Oana", cpremier: "CPremier" };
@@ -55,12 +52,14 @@ bot.on("message", async (ctx) => {
   }
 });
 
-// Handler para Vercel
+// Handler Vercel
 export default async function handler(req, res) {
   if (req.method === "POST") {
-    // Telegram → webhook
+    // --- SHIM para “express” en Vercel ---
+    if (typeof req.header !== "function") {
+      req.header = (name) => req.headers?.[name.toLowerCase()];
+    }
     return webhookCallback(bot, "express")(req, res);
   }
-  // Healthcheck
   res.status(200).send("OK");
 }
