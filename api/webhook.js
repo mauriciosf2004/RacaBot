@@ -5,61 +5,38 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) throw new Error("Falta TELEGRAM_BOT_TOKEN");
 
 const bot = new Bot(TOKEN);
-bot.init().catch(() => {}); // evitar long-polling en Vercel
+bot.init().catch(() => {}); // evitar error en Vercel
 
-const PASSWORD = "Raca2025@";
-const sessions = new Map(); // chatId -> { authenticated: true, cliente: "Rebel"|"Oana"|"CPremier" }
-
-// /start: pide contraseña si no está autenticado
+// /start: selector de cliente
 bot.command("start", async (ctx) => {
-  const chatId = ctx.chat.id;
-  const ses = sessions.get(chatId) || {};
-  if (!ses.authenticated) {
-    await ctx.reply("🔒 Ingresa la contraseña para usar el bot:");
-    sessions.set(chatId, { ...ses, awaitingPassword: true });
-    return;
-  }
-
   const kb = new InlineKeyboard()
-    .text("Rebel 🏠", "cliente:Rebel").text("Oana 🌊", "cliente:Oana").row()
+    .text("Rebel 🏠", "cliente:Rebel")
+    .text("Oana 🌊", "cliente:Oana")
+    .row()
     .text("CPremier 🏢", "cliente:CPremier");
 
   await ctx.reply("Elige el cliente con el que quieres trabajar:", { reply_markup: kb });
 });
 
-// Contraseña
-bot.on("message:text", async (ctx, next) => {
-  const chatId = ctx.chat.id;
-  const ses = sessions.get(chatId);
-
-  if (ses?.awaitingPassword) {
-    const pass = ctx.message.text.trim();
-    if (pass === PASSWORD) {
-      sessions.set(chatId, { authenticated: true });
-      await ctx.reply("✅ Acceso concedido. Usa /start para comenzar.");
-    } else {
-      await ctx.reply("❌ Contraseña incorrecta. Intenta de nuevo con /start.");
-    }
-    return; // importante: no seguir
-  }
-
-  await next(); // pasar al siguiente middleware (como mensajes normales)
-});
-
-// Selección de cliente
+// Selección de cliente con botones
 bot.callbackQuery(/^cliente:(.*)$/, async (ctx) => {
   const cliente = ctx.match[1];
   setCliente(ctx.chat.id, cliente);
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`, { parse_mode: "Markdown" });
+  await ctx.editMessageText(
+    `Cliente seleccionado: *${cliente}*.\n\nEscribe tu pregunta.`,
+    { parse_mode: "Markdown" }
+  );
 });
 
-// Preguntas normales
+// Mensajes de texto
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text?.trim();
   if (!text) return;
 
   let cliente = getCliente(ctx.chat.id);
+
+  // Permite escribir: rebel: pregunta...
   const m = text.match(/^(rebel|oana|cpremier)\s*:\s*(.*)$/i);
   if (m) {
     const map = { rebel: "Rebel", oana: "Oana", cpremier: "CPremier" };
@@ -86,10 +63,11 @@ bot.on("message:text", async (ctx) => {
   }
 });
 
-// Webhook handler para Vercel
+// Webhook para Vercel
 export default async function handler(req, res) {
   if (req.method === "POST") {
     return webhookCallback(bot, "express")(req, res);
   }
   res.status(200).send("OK");
 }
+
